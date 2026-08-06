@@ -22,6 +22,7 @@ MAZE_ROWS = 60
 BLOCK_SIZE = 8 # each wall block is 5x5 pixels
 MAZE_W = MAZE_COLS * BLOCK_SIZE
 MAZE_H = MAZE_ROWS * BLOCK_SIZE
+LOOP_CHANCE = 0.15 # fraction of remaining inner walls knocked down to add loops/alternate routes
 
 # Side-by-side panels: each agent gets its own maze render, so their
 # trails/paths never share a pixel and never need to fight for visibility.
@@ -69,6 +70,24 @@ def generate_maze(cols, rows):
     return maze
 
 
+# Braid the perfect maze: a randomized-DFS carve leaves a spanning tree, so
+# there's exactly one route between any two cells. Knock down a random
+# subset of the remaining inner walls to add loops, so multiple different-
+# length routes actually exist for a search strategy to choose between.
+
+def add_loops(maze, cols, rows, loop_chance):
+    for y in range(1, rows - 1, 2):
+        for x in range(1, cols - 1, 2):
+            for dx, dy in ((2, 0), (0, 2)): # only right/down - each wall considered once
+                nx, ny = x + dx, y + dy
+                if nx >= cols - 1 or ny >= rows - 1:
+                    continue
+                wx, wy = x + dx // 2, y + dy // 2
+                if maze[wy][wx] and random.random() < loop_chance:
+                    maze[wy][wx] = False # open the wall between the two rooms
+    return maze
+
+
 
 # Draw the maze to the screen
 
@@ -87,6 +106,7 @@ def draw_maze(screen, maze, block_size, offset_x, offset_y):
 
 
 maze = generate_maze(MAZE_COLS, MAZE_ROWS)
+maze = add_loops(maze, MAZE_COLS, MAZE_ROWS, LOOP_CHANCE)
 
 
 # PICK GOAL STATE FOR PUZZLE
