@@ -20,8 +20,17 @@ dt = 0 # delta time in seconds, set before the loop so first-frame key presses d
 MAZE_COLS = 60
 MAZE_ROWS = 60
 BLOCK_SIZE = 8 # each wall block is 5x5 pixels
-MAZE_OFFSET_X = (screen.get_width() - MAZE_COLS * BLOCK_SIZE) // 2
-MAZE_OFFSET_Y = (screen.get_height() - MAZE_ROWS * BLOCK_SIZE) // 2
+MAZE_W = MAZE_COLS * BLOCK_SIZE
+MAZE_H = MAZE_ROWS * BLOCK_SIZE
+
+# Side-by-side panels: each agent gets its own maze render, so their
+# trails/paths never share a pixel and never need to fight for visibility.
+PANEL_GAP = 60
+_panels_total_w = MAZE_W * 2 + PANEL_GAP
+PANEL1_OFFSET_X = (screen.get_width() - _panels_total_w) // 2
+PANEL1_OFFSET_Y = (screen.get_height() - MAZE_H) // 2
+PANEL2_OFFSET_X = PANEL1_OFFSET_X + MAZE_W + PANEL_GAP
+PANEL2_OFFSET_Y = PANEL1_OFFSET_Y
 
 
 
@@ -93,9 +102,15 @@ for row_idx, row in enumerate(maze): # Go through list object
 goalState = random.choice(goalSet) # Pick a random Tuple representing the x, y location of the goal state
 
 goal_x, goal_y = goalState
-redSquare = pygame.Rect(
-    MAZE_OFFSET_X + goal_x * BLOCK_SIZE,
-    MAZE_OFFSET_Y + goal_y * BLOCK_SIZE,
+goal_rect_panel1 = pygame.Rect(
+    PANEL1_OFFSET_X + goal_x * BLOCK_SIZE,
+    PANEL1_OFFSET_Y + goal_y * BLOCK_SIZE,
+    BLOCK_SIZE,
+    BLOCK_SIZE
+)
+goal_rect_panel2 = pygame.Rect(
+    PANEL2_OFFSET_X + goal_x * BLOCK_SIZE,
+    PANEL2_OFFSET_Y + goal_y * BLOCK_SIZE,
     BLOCK_SIZE,
     BLOCK_SIZE
 )
@@ -387,16 +402,15 @@ class Agent:
 
     # Drawing the explored-cell trail (search order, revealed progressively)
 
-    def draw_trail(self, surface):
-        # surface is the maze-local alpha layer, blitted with the maze offset applied once.
-        # Alpha < 255 lets overlapping trails from both agents blend instead of one hiding the other.
-        r, g, b = self.color
-        trail_color = (r, g, b, 140)
+    def draw_trail(self, surface, offset_x, offset_y):
+        # Each agent has its own panel now, so there's no cross-agent overlap
+        # to worry about - a plain lighter tint of the agent's own colour is enough.
+        trail_color = tuple(min(c + 70, 255) for c in self.color)
 
         for cx, cy in self.explored[:self.explore_index]:
             rect = pygame.Rect(
-                cx * BLOCK_SIZE,
-                cy * BLOCK_SIZE,
+                offset_x + cx * BLOCK_SIZE,
+                offset_y + cy * BLOCK_SIZE,
                 BLOCK_SIZE,
                 BLOCK_SIZE
             )
@@ -404,7 +418,7 @@ class Agent:
 
     # Drawing the bold, fully-opaque solved route (distinct from the faint exploration trail)
 
-    def draw_path(self, surface):
+    def draw_path(self, surface, offset_x, offset_y):
         if self.explore_index < len(self.explored):
             return # still revealing the trail - don't spoil the final route yet
         if not self.solution_path:
@@ -413,8 +427,8 @@ class Agent:
         def center(cell):
             cx, cy = cell
             return (
-                MAZE_OFFSET_X + cx * BLOCK_SIZE + BLOCK_SIZE // 2,
-                MAZE_OFFSET_Y + cy * BLOCK_SIZE + BLOCK_SIZE // 2,
+                offset_x + cx * BLOCK_SIZE + BLOCK_SIZE // 2,
+                offset_y + cy * BLOCK_SIZE + BLOCK_SIZE // 2,
             )
 
         points = [center(self.start)] + [center(cell) for cell in self.solution_path]
@@ -422,10 +436,10 @@ class Agent:
 
     # Drawing the Agent
 
-    def draw(self, surface):
+    def draw(self, surface, offset_x, offset_y):
 
-        x = MAZE_OFFSET_X + self.position[0] * BLOCK_SIZE
-        y = MAZE_OFFSET_Y + self.position[1] * BLOCK_SIZE
+        x = offset_x + self.position[0] * BLOCK_SIZE
+        y = offset_y + self.position[1] * BLOCK_SIZE
 
         pygame.draw.rect(
             surface,
@@ -500,14 +514,18 @@ def run_algorithm_menu(screen, clock, algorithms):
     return algorithms[agent1_choice][1], algorithms[agent2_choice][1]
 
 
-def draw_legend(surface, agents, font):
-    """Small HUD panel showing each agent's colour swatch next to its algorithm name."""
-    x, y = 10, 10
-    for agent in agents:
-        pygame.draw.rect(surface, agent.color, (x, y, 16, 16))
-        label = font.render(type(agent.strategy).__name__, True, "white")
-        surface.blit(label, (x + 22, y - 2))
-        y += 24
+def draw_panel_title(surface, agent, offset_x, font, is_winner):
+    """Algorithm name centred above an agent's own panel, in that agent's colour."""
+    text = type(agent.strategy).__name__
+    if is_winner:
+        text += "  ★ WINNER"
+    label = font.render(text, True, agent.color)
+    rect = label.get_rect(midbottom=(offset_x + MAZE_W // 2, PANEL1_OFFSET_Y - 10))
+    surface.blit(label, rect)
+
+    if is_winner:
+        border = pygame.Rect(offset_x - 4, PANEL1_OFFSET_Y - 4, MAZE_W + 8, MAZE_H + 8)
+        pygame.draw.rect(surface, agent.color, border, 3)
 
 
 def print_results(winner, loser):
@@ -526,13 +544,48 @@ def print_results(winner, loser):
     print("=" * 44)
 
 
+def draw_finish_screen(surface, winner, loser, title_font, font):
+    """Dimmed overlay shown once the race ends: winner banner + both agents' stats."""
+    overlay = pygame.Surface(surface.get_size(), pygame.SRCALPHA)
+    overlay.fill((0, 0, 0, 190))
+    surface.blit(overlay, (0, 0))
+
+    cx = surface.get_width() // 2
+    y = 130
+
+    title = title_font.render("RACE OVER", True, "white")
+    surface.blit(title, title.get_rect(center=(cx, y)))
+    y += 60
+
+    winner_label = title_font.render(f"WINNER: {type(winner.strategy).__name__}", True, winner.color)
+    surface.blit(winner_label, winner_label.get_rect(center=(cx, y)))
+    y += 70
+
+    def stats_block(agent, label, x):
+        line_y = y
+        header = font.render(f"{label} - {type(agent.strategy).__name__}", True, agent.color)
+        surface.blit(header, (x, line_y))
+        line_y += 34
+        depth_text = agent.solution_depth if agent.solution_depth else "no path found"
+        for line in (
+            f"Nodes explored:      {len(agent.explored)}",
+            f"Max search depth:    {agent.max_depth}",
+            f"Solution path depth: {depth_text}",
+        ):
+            surface.blit(font.render(line, True, "white"), (x, line_y))
+            line_y += 28
+
+    stats_block(winner, "WINNER", cx - 420)
+    stats_block(loser, "LOSER", cx + 60)
+
+
 ####################
 # Agent Set-up:
 ######################
 
 Agent1Strategy, Agent2Strategy = run_algorithm_menu(screen, clock, ALGORITHMS)
-hud_font = pygame.font.SysFont(None, 24)
-trail_surface = pygame.Surface((MAZE_COLS * BLOCK_SIZE, MAZE_ROWS * BLOCK_SIZE), pygame.SRCALPHA)
+hud_font = pygame.font.SysFont(None, 28)
+finish_title_font = pygame.font.SysFont(None, 48)
 
 AGENT1_COLOR = (40, 110, 255) # blue
 AGENT2_COLOR = (255, 215, 0)  # yellow
@@ -554,6 +607,11 @@ race_over = False
 ######################
 
 
+panels = (
+    (agent1, PANEL1_OFFSET_X, PANEL1_OFFSET_Y, goal_rect_panel1),
+    (agent2, PANEL2_OFFSET_X, PANEL2_OFFSET_Y, goal_rect_panel2),
+)
+
 while running:
     # poll for events
     # pygame.QUIT event means the user clicked X to close the window
@@ -566,22 +624,14 @@ while running:
 
     # Render Game Here -----!!!!
 
-    draw_maze(screen, maze, BLOCK_SIZE, MAZE_OFFSET_X, MAZE_OFFSET_Y)
+    for agent, offset_x, offset_y, goal_rect in panels:
+        draw_maze(screen, maze, BLOCK_SIZE, offset_x, offset_y)
+        agent.draw_trail(screen, offset_x, offset_y)
+        agent.draw_path(screen, offset_x, offset_y)
+        pygame.draw.rect(screen, "red", goal_rect)
+        draw_panel_title(screen, agent, offset_x, hud_font, race_over and agent is winner)
 
-    # Explored-cell trails, blended via alpha so overlapping paths mix colour instead of one hiding the other
-    trail_surface.fill((0, 0, 0, 0))
-    agent1.draw_trail(trail_surface)
-    agent2.draw_trail(trail_surface)
-    screen.blit(trail_surface, (MAZE_OFFSET_X, MAZE_OFFSET_Y))
-
-    # Bold, fully-opaque line marking the solved route - only for whichever agent wins the race
-    if race_over:
-        winner.draw_path(screen)
-
-    # Print Goal State on Maze
-    pygame.draw.rect(screen, "red", redSquare)
-
-    # Update + Draw Agents (frozen once the race has been won)
+    # Update Agents (frozen once the race has been won)
     if not race_over:
         agent1.update(dt)
         agent2.update(dt)
@@ -596,18 +646,17 @@ while running:
         if race_over:
             print_results(winner, loser)
 
-    agent1.draw(screen)
-    agent2.draw(screen)
+    for agent, offset_x, offset_y, goal_rect in panels:
+        agent.draw(screen, offset_x, offset_y)
 
-    # Legend: which agent is running which algorithm
-    draw_legend(screen, [agent1, agent2], hud_font)
+    if race_over:
+        draw_finish_screen(screen, winner, loser, finish_title_font, hud_font)
 
-
-    # flip() the displat to put your work on screen 
+    # flip() the displat to put your work on screen
     pygame.display.flip()
 
-    # dt is delta time in seconds since last frame, used for framerate independent physics. 
+    # dt is delta time in seconds since last frame, used for framerate independent physics.
 
     dt = clock.tick(60) / 1000 # 60 FPS
 
-pygame.quit()        
+pygame.quit()
