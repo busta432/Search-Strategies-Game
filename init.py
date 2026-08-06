@@ -306,17 +306,158 @@ class DFS(SearchStrategy):
 
 
 
-# Iterative Deepening:
+# Iterative Deepening
+
+class IterativeDeepening(SearchStrategy):
+    def search(self, maze, start, goal):
+        explored = []   # accumulated across every depth-limit pass, for stats/trail
+        max_depth = 0
+
+        for limit in itertools.count():
+            # Fresh DFS state each pass - a bigger limit can re-open branches
+            # that got cut off last time, so nothing carries over.
+            frontier = deque([start])
+            prev = {start: None}
+            depth = {start: 0}
+            cutoff_hit = False # did we stop expanding anything purely due to the limit?
+
+            while frontier:
+                curr = frontier.pop() # DFS: pop from the right (stack behaviour)
+                explored.append(curr)
+                max_depth = max(max_depth, depth[curr])
+
+                if curr == goal:
+                    return self.reconstuct_ID(prev, start, goal), explored, max_depth
+
+                if depth[curr] == limit:
+                    cutoff_hit = True
+                    continue # at the limit - don't expand this node's children
+
+                for dx, dy in ((0, 1), (0, -1), (1, 0), (-1, 0)):
+                    nx, ny = curr[0] + dx, curr[1] + dy
+                    child = (nx, ny)
+                    if 0 <= nx < MAZE_COLS and 0 <= ny < MAZE_ROWS \
+                    and not maze[ny][nx] and child not in prev:
+                        prev[child] = curr
+                        depth[child] = depth[curr] + 1
+                        frontier.append(child)
+
+            if not cutoff_hit:
+                # This pass explored everything reachable and never hit the
+                # limit - a deeper limit won't find anything new either.
+                return [], explored, max_depth # Failed Search
+
+    def reconstuct_ID(self, prev, start, goal):
+        if goal not in prev:
+            return []
+        path = []
+        node = goal
+        while node != start:
+            path.append(node)
+            node = prev[node]
+        path.reverse()
+        return path
 
 
-# Best First Search
-
+###################
+# INFORMED SEARCH
+###################
 
 # Greedy Best First Search
+# h(n) - L1 (Manhattan) distance to goal, path cost ignored entirely
+
+class BestFirst(SearchStrategy):
+    def search(self, maze, start, goal):
+        counter = itertools.count()
+        frontier = [(self.manhattan(start, goal), next(counter), Node(start, None, 0))] # is heapq not deque as priority queue. Store h(n) (L1 Distance)
+        # Stores three elements - h(n) prioirty of the heuristic, count so if two entries have the same priority failback to comparing the next element (stops crashing)
+        # node which stores the actual Node we care about
+        visited = {start}
+        explored = []
+        max_depth = 0
+
+        while frontier:
+            _, _, node = heapq.heappop(frontier) #Pop the smallest item off the heap. proirity and counter given throw-away variable names
+            explored.append(node.position) #Append (x,y) of the node
+            max_depth = max(max_depth, node.cost) # node.cost tracks depth here, not path cost - not used in priority
+            if node.position == goal:
+                return self.reconstruct_BestFirst(node), explored, max_depth
+
+            for dx, dy in ((0, 1), (0, -1), (1, 0), (-1, 0)):
+                nx, ny = node.position[0] + dx, node.position[1] + dy
+                neighbour = (nx, ny)
+                if not (0 <= nx < MAZE_COLS and 0 <= ny < MAZE_ROWS):
+                    continue
+                if maze[ny][nx] or neighbour in visited:
+                    continue
+                visited.add(neighbour)
+                priority = self.manhattan(neighbour, goal) # greedy: rank purely on h(n), ignore path cost so far
+                heapq.heappush(frontier, (priority, next(counter), Node(neighbour, node, node.cost + 1)))
+
+        return [], explored, max_depth # Failed Search
+
+    def manhattan(self, a, b):
+        return abs(a[0] - b[0]) + abs(a[1] - b[1])
+
+    def reconstruct_BestFirst(self, node):
+        path = []
+        while node.parent is not None:
+            path.append(node.position)
+            node = node.parent
+        path.reverse()
+        return path
 
 
 # A* Search
+# f(n) = g(n) + h(n) - path cost so far plus Manhattan distance to goal.
+# Uses the same best_cost/stale-entry pattern as UniformCostSearch (rather
+# than BestFirst's simple visited set) so a cheaper path discovered later
+# can still replace a costlier one already on the frontier.
 
+class AStar(SearchStrategy):
+    def search(self, maze, start, goal):
+        counter = itertools.count()
+        frontier = [(self.manhattan(start, goal), next(counter), Node(start, None, 0))]
+        best_cost = {start: 0}
+        explored = []
+        max_depth = 0
+
+        while frontier:
+            _, _, node = heapq.heappop(frontier)
+            explored.append(node.position)
+            max_depth = max(max_depth, node.cost)
+            if node.position == goal:
+                return self.reconstruct_AStar(node), explored, max_depth
+            if node.cost > best_cost.get(node.position, float("inf")):
+                continue # stale entry, a cheaper path already won
+
+            for dx, dy in ((0,1), (0, -1), (1, 0), (-1, 0)):
+                nx, ny = node.position[0] + dx, node.position[1] + dy
+                child = (nx, ny)
+                if not (0 <= nx < MAZE_COLS and 0 <= ny < MAZE_ROWS):
+                    continue
+                if maze[ny][nx]:
+                    continue
+                new_cost = node.cost + 1
+                if new_cost < best_cost.get(child, float("inf")):
+                    best_cost[child] = new_cost
+                    priority = new_cost + self.manhattan(child, goal)
+                    heapq.heappush(frontier, (priority, next(counter), Node(child, node, new_cost)))
+
+        return [], explored, max_depth
+
+    def manhattan(self, a, b):
+        return abs(a[0] - b[0]) + abs(a[1] - b[1])
+
+    def reconstruct_AStar(self, node):
+        path = []
+        while node.parent is not None:
+            path.append(node.position)
+            node = node.parent
+        path.reverse()
+        return path
+
+    
 # A* Iterative Deepening
 
 
@@ -332,6 +473,9 @@ ALGORITHMS = [
     ("DFS", DFS),
     ("UCS", UniformCostSearch),
     ("DLS", DepthLimitedSearch),
+    ("ID", IterativeDeepening),
+    ("Greedy", BestFirst),
+    ("A*", AStar),
 ]
 
 
@@ -432,7 +576,10 @@ class Agent:
             )
 
         points = [center(self.start)] + [center(cell) for cell in self.solution_path]
-        pygame.draw.lines(surface, self.color, False, points, 4)
+        # Inverted agent colour - guarantees the route reads as distinct from
+        # the agent square and its own (lighter-tint-of-self.color) trail.
+        path_color = tuple(255 - c for c in self.color)
+        pygame.draw.lines(surface, path_color, False, points, 4)
 
     # Drawing the Agent
 
