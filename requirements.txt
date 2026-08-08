@@ -1,0 +1,5 @@
+pygame==2.6.1
+
+# dev/testing only - not needed to just play the game
+pytest==9.1.1
+matplotlib==3.11.1
